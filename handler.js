@@ -154,22 +154,90 @@ export async function handler(m) {
         }
 
         if (beforeHandler) {
-          try {
-            const beforeResult = await beforeHandler.call(this, m, {
-              conn: this,
-              isROwner,
-              isOwner,
-              isPrems,
-              isBotAdmin: m.isBotAdmin,
-              isAdmin: m.isAdmin,
-            })
+          // Special handling: ytmp4 uses button callback (ytv:session:quality) to actually download
+          const isYtCallback = !!(m.callbackQuery && typeof m.text === 'string' && /^ytv:/.test(m.text))
+          const isYtmp4Plugin = (() => {
+            try {
+              const cmd = pluginData.command || pluginData.usage
+              if (!cmd) return false
+              if (cmd instanceof RegExp) return /yt(mp4|v|video)/i.test(String(cmd))
+              if (Array.isArray(cmd)) return cmd.some(c => c instanceof RegExp ? /yt(mp4|v|video)/i.test(String(c)) : /^(ytmp4|ytv|ytvideo)$/i.test(String(c)))
+              if (typeof cmd === 'string') return /^(ytmp4|ytv|ytvideo)$/i.test(cmd)
+            } catch {}
+            return false
+          })()
 
-            if (beforeResult === false) {
-              console.log(`Plugin ${name} before handler returned false, skipping...`)
+          if (isYtCallback && isYtmp4Plugin && pluginData.limit) {
+            // Defer charging until after successful before-handler run
+            const requiredLimit = pluginData.limit === true ? 1 : pluginData.limit
+            const user = global.db?.data?.users?.[m.sender]
+            try {
+              if (!isPrems && !isOwner) {
+                if (!user) throw new Error('User not initialized')
+                if (typeof user.limit !== 'number') user.limit = 30
+                if (user.limit < requiredLimit) {
+                  if (user.limit === 0) await m.reply('Limit kamu habis', m)
+                  else await m.reply(`Limit tidak mencukupi, membutuhkan ${requiredLimit}, dan kamu hanya mempunyai ${user.limit}`, m)
+                  continue
+                }
+              }
+
+              // Check if session exists to distinguish expired vs valid selection
+              let preHadSession = false
+              try {
+                const parts = (m.text || '').split(':')
+                if (parts.length === 3) {
+                  const sid = parts[1]
+                  if (global.__ytmp4Sessions && global.__ytmp4Sessions[sid]) preHadSession = true
+                }
+              } catch {}
+
+              const beforeResult = await beforeHandler.call(this, m, {
+                conn: this,
+                isROwner,
+                isOwner,
+                isPrems,
+                isBotAdmin: m.isBotAdmin,
+                isAdmin: m.isAdmin,
+              })
+
+              if (!isPrems && !isOwner && preHadSession && beforeResult === false) {
+                try {
+                  user.limit -= requiredLimit
+                  const sisa = user.limit
+                  const limitMsg = `✅ ${requiredLimit} limit terpakai\n💡 Sisa limit: ${sisa}`
+                  m.reply(limitMsg)
+                } catch (e) {
+                  console.error('Gagal mengurangi/menginformasikan limit (ytmp4 before):', e)
+                }
+              }
+
+              if (beforeResult === false) {
+                console.log(`Plugin ${name} before handler returned false, skipping...`)
+                continue
+              }
+            } catch (e) {
+              console.error(`Plugin Before Error (${name}):`, e)
               continue
             }
-          } catch (e) {
-            console.error(`Plugin Before Error (${name}):`, e)
+          } else {
+            try {
+              const beforeResult = await beforeHandler.call(this, m, {
+                conn: this,
+                isROwner,
+                isOwner,
+                isPrems,
+                isBotAdmin: m.isBotAdmin,
+                isAdmin: m.isAdmin,
+              })
+
+              if (beforeResult === false) {
+                console.log(`Plugin ${name} before handler returned false, skipping...`)
+                continue
+              }
+            } catch (e) {
+              console.error(`Plugin Before Error (${name}):`, e)
+            }
           }
         }
       }
@@ -347,19 +415,49 @@ export async function handler(m) {
 
           if (!isPrems && !isOwner && pluginData.limit) {
             const requiredLimit = pluginData.limit === true ? 1 : pluginData.limit
-            if (!args || args.length === 0) {
-              m.limit = false
-            } else {
-              if (global.db.data.users[m.sender].limit < requiredLimit) {
-                if (global.db.data.users[m.sender].limit === 0) {
+            const isYtmp4Cmd = (() => {
+              try {
+                const cmd = pluginData.command || pluginData.usage
+                if (!cmd) return false
+                if (cmd instanceof RegExp) return /yt(mp4|v|video)/i.test(String(cmd))
+                if (Array.isArray(cmd)) return cmd.some(c => c instanceof RegExp ? /yt(mp4|v|video)/i.test(String(c)) : /^(ytmp4|ytv|ytvideo)$/i.test(String(c)))
+                if (typeof cmd === 'string') return /^(ytmp4|ytv|ytvideo)$/i.test(cmd)
+              } catch {}
+              return false
+            })()
+
+            if (isYtmp4Cmd) {
+              // ytmp4: Defer charging; validate only
+              if (!global.db.data.users[m.sender] || typeof global.db.data.users[m.sender].limit !== 'number') {
+                global.db.data.users[m.sender] = global.db.data.users[m.sender] || {}
+                if (typeof global.db.data.users[m.sender].limit !== 'number') global.db.data.users[m.sender].limit = 30
+              }
+              const have = global.db.data.users[m.sender].limit
+              if (have < requiredLimit) {
+                if (have === 0) {
                   await m.reply(`Limit kamu habis`, m)
                 } else {
-                  await m.reply(`Limit tidak mencukupi, membutuhkan ${requiredLimit}, dan kamu hanya mempunyai ${global.db.data.users[m.sender].limit}`, m)
+                  await m.reply(`Limit tidak mencukupi, membutuhkan ${requiredLimit}, dan kamu hanya mempunyai ${have}`, m)
                 }
                 continue
               }
-              global.db.data.users[m.sender].limit -= requiredLimit
-              m.limit = requiredLimit
+              m.limit = false
+              m._deferLimit = requiredLimit
+            } else {
+              if (!args || args.length === 0) {
+                m.limit = false
+              } else {
+                if (global.db.data.users[m.sender].limit < requiredLimit) {
+                  if (global.db.data.users[m.sender].limit === 0) {
+                    await m.reply(`Limit kamu habis`, m)
+                  } else {
+                    await m.reply(`Limit tidak mencukupi, membutuhkan ${requiredLimit}, dan kamu hanya mempunyai ${global.db.data.users[m.sender].limit}`, m)
+                  }
+                  continue
+                }
+                global.db.data.users[m.sender].limit -= requiredLimit
+                m.limit = requiredLimit
+              }
             }
           }
 
@@ -389,22 +487,31 @@ export async function handler(m) {
 
 
 
-            if (!isPrems && !isOwner && pluginData.limit && typeof m.limit === 'number' && m.limit > 0) {
-              const sisa = global.db.data.users[m.sender].limit
-              const limitMsg = `✅ ${m.limit} limit terpakai\n💡 Sisa limit: ${sisa}`
+            if (!isPrems && !isOwner && pluginData.limit) {
+              const isYtmp4Cmd = (() => {
+                try {
+                  const cmd = pluginData.command || pluginData.usage
+                  if (!cmd) return false
+                  if (cmd instanceof RegExp) return /yt(mp4|v|video)/i.test(String(cmd))
+                  if (Array.isArray(cmd)) return cmd.some(c => c instanceof RegExp ? /yt(mp4|v|video)/i.test(String(c)) : /^(ytmp4|ytv|ytvideo)$/i.test(String(c)))
+                  if (typeof cmd === 'string') return /^(ytmp4|ytv|ytvideo)$/i.test(cmd)
+                } catch {}
+                return false
+              })()
 
-              try {
-                if (m.isGroup) {
-                  // 📨 Kirim ke PM user jika command dilakukan di grup
-                  m.reply(limitMsg);
-                  // await this.sendMessFage(m.sender, { text: limitMsg }, { quoted: m })
-                } else {
-                  // 📩 Kirim langsung di private
-                  m.reply(limitMsg);
-                  // await this.sendMessage(m.chat, { text: limitMsg }, { quoted: m })
+              if (typeof m.limit === 'number' && m.limit > 0) {
+                const sisa = global.db.data.users[m.sender].limit
+                const limitMsg = `✅ ${m.limit} limit terpakai\n💡 Sisa limit: ${sisa}`
+                try { m.reply(limitMsg) } catch (e) { console.error("Gagal kirim info limit:", e) }
+              } else if (isYtmp4Cmd && m._deferLimit > 0) {
+                try {
+                  global.db.data.users[m.sender].limit -= m._deferLimit
+                  const sisa = global.db.data.users[m.sender].limit
+                  const limitMsg = `✅ ${m._deferLimit} limit terpakai\n💡 Sisa limit: ${sisa}`
+                  m.reply(limitMsg)
+                } catch (e) {
+                  console.error('Gagal mengurangi/menginformasikan limit (ytmp4 after success):', e)
                 }
-              } catch (e) {
-                console.error("Gagal kirim info limit:", e)
               }
             }
 
