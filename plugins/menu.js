@@ -55,6 +55,7 @@ const categoryNames = {
   tools: "⚙️ TOOLS",
   downloader: "💫 DOWNLOADER",
   stalk: "🔍 STALK",
+  internet: "🌐 INTERNET",
   // fun: "🎪 FUN",
   group: "👾 GROUP",
   owner: "👤 OWNER",
