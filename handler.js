@@ -15,11 +15,18 @@ async function rlimit() {
   const resetTime = moment().tz("Asia/Jakarta").startOf('day')
 
   if (now.isSameOrAfter(resetTime)) {
+    const MAX_LIMIT = isNumber(global.limitMax) ? global.limitMax : 200
+    const DAILY_ADD = isNumber(global.limit) ? global.limit : 30
+    const dateStr = resetTime.format('YYYY-MM-DD')
     for (const userId in global.db.data.users) {
       const user = global.db.data.users[userId]
-      if (user.lastReset !== resetTime.format('YYYY-MM-DD')) {
-        user.limit += 30
-        user.lastReset = resetTime.format('YYYY-MM-DD')
+      if (user.lastReset !== dateStr) {
+        const current = isNumber(user.limit) ? user.limit : 0
+        if (current < MAX_LIMIT) {
+          const toAdd = Math.min(DAILY_ADD, MAX_LIMIT - current)
+          user.limit = current + toAdd
+        }
+        user.lastReset = dateStr
       }
     }
   }

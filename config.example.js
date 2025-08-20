@@ -23,6 +23,8 @@ global.ports = [4000, 3000, 5000, 8000];
 
 // Database configuration
 global.limit = 100;
+// Maximum limit a user can have (cap). Daily reset will not exceed this.
+global.limitMax = 200;
 
 global.APIs = {
   //lann: 'https://api.betabotz.eu.org',
