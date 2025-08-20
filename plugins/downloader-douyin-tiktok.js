@@ -1,5 +1,29 @@
 import axios from 'axios'
 
+// Telegram limits: captions ~1024 chars, text messages ~4096 chars
+const TELEGRAM_CAPTION_LIMIT = 1024
+const TELEGRAM_TEXT_LIMIT = 4096
+
+function chunkString(str, size) {
+    const chunks = []
+    for (let i = 0; i < str.length; i += size) chunks.push(str.slice(i, i + size))
+    return chunks
+}
+
+async function sendFileWithSafeCaption(conn, chatId, fileUrl, fileName, caption, m, fullText, extraOptions = {}) {
+    const cap = String(caption || '')
+    const opts = { parse_mode: 'HTML', ...extraOptions }
+    if (cap.length <= TELEGRAM_CAPTION_LIMIT) {
+        return conn.sendFile(chatId, fileUrl, fileName, cap, m, opts)
+    }
+    const truncated = cap.slice(0, TELEGRAM_CAPTION_LIMIT - 3) + '...'
+    await conn.sendFile(chatId, fileUrl, fileName, truncated, m, opts)
+    const text = String(fullText || cap)
+    for (const part of chunkString(text, TELEGRAM_TEXT_LIMIT)) {
+        await conn.reply(chatId, part, m)
+    }
+}
+
 let handler = async (m, { conn, args, usedPrefix, command }) => {
     if (!args[0])
         throw `[❗] Example: ${usedPrefix + command} https://www.tiktok.com/@m4uryy/video/7350083403556883745\n\nor\n\n${usedPrefix + command} https://v.douyin.com/i5GhvkBY/`
@@ -47,13 +71,15 @@ let handler = async (m, { conn, args, usedPrefix, command }) => {
                     const caption = i === 0
                         ? `Here's your picture ${i + 1} (≧◡≦)\n\n${info}`
                         : `Here's your picture ${i + 1} (≧◡≦)`
-                    await conn.sendFile(m.chat, videoData.images[i], `image${i + 1}.jpg`, caption, m, { parse_mode: "HTML" })
+                    const fullText = i === 0 ? `Info:\n${info}` : undefined
+                    await sendFileWithSafeCaption(conn, m.chat, videoData.images[i], `image${i + 1}.jpg`, caption, m, fullText)
                 }
             } else throw "No images available."
         } else {
             if (videoURL || videoURLWatermark) {
                 const vidCaption = `Here's the video (≧◡≦)\n\n${info}`
-                await conn.sendFile(m.chat, videoURL, isDouyin ? "douyin.mp4" : "tiktok.mp4", vidCaption, m, { parse_mode: "HTML" })
+                const mediaUrl = videoURL || videoURLWatermark
+                await sendFileWithSafeCaption(conn, m.chat, mediaUrl, isDouyin ? 'douyin.mp4' : 'tiktok.mp4', vidCaption, m, `Info:\n${info}`)
             } else throw "No video link available."
         }
     } catch (error) {
