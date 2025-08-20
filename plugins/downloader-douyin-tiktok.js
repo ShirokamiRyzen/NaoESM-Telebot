@@ -1,6 +1,24 @@
 import axios from 'axios'
 
-// Telegram limits: captions ~1024 chars, text messages ~4096 chars
+function getDisplayName(m, conn) {
+    const from =
+        m.from ||
+        m.fakeObj?.message?.from ||
+        m.message?.from ||
+        m.quoted?.fakeObj?.message?.from ||
+        null
+
+    if (from?.username) return `@${from.username}`
+    if (from?.first_name && from?.last_name) return `${from.first_name} ${from.last_name}`
+    if (from?.first_name) return from.first_name
+
+    try {
+        const n = conn?.getName?.(m.sender)
+        if (n) return n
+    } catch {}
+    return 'nya~'
+}
+
 const TELEGRAM_CAPTION_LIMIT = 1024
 const TELEGRAM_TEXT_LIMIT = 4096
 
@@ -50,7 +68,7 @@ let handler = async (m, { conn, args, usedPrefix, command }) => {
             const uploadTime = new Date(videoData.create_time * 1000).toLocaleString()
             const author = videoData.author || {}
             const authorId = author.unique_id || author.short_id || "unknown"
-            info = `Title: ${videoData.desc}\nUpload: ${uploadTime}\n\nUploader: ${author.nickname || "unknown"}\n(${authorId} - https://www.douyin.com/user/${authorId})\nSound: ${videoData.music.author}\n`
+            info = `Upload: ${uploadTime}\n\nUploader: ${author.nickname || "unknown"}\n(${authorId} - https://www.douyin.com/user/${authorId})\nSound: ${videoData.music.author}\n`
         } else {
             videoData = response.data?.data
             if (!videoData) throw "Failed to download TikTok video!"
@@ -58,7 +76,7 @@ let handler = async (m, { conn, args, usedPrefix, command }) => {
             videoURL = args[1] === "hd" && hdURL ? hdURL : videoData.play
             videoURLWatermark = videoData.wmplay
             const author = videoData.author || {}
-            info = `Title: ${videoData.title}\nUpload: ${videoData.create_time}\n\nSTATUS:\n=====================\nLike = ${videoData.digg_count}\nComment = ${videoData.comment_count}\nShare = ${videoData.share_count}\nViews = ${videoData.play_count}\nSaves = ${videoData.download_count}\n=====================\n\nUploader: ${author.nickname || "unknown"}\n(${author.unique_id || "unknown"} - https://www.tiktok.com/@${author.unique_id || "unknown"})\nSound: ${videoData.music}\n`
+            info = `Upload: ${videoData.create_time}\n\nSTATUS:\n=====================\nLike = ${videoData.digg_count}\nComment = ${videoData.comment_count}\nShare = ${videoData.share_count}\nViews = ${videoData.play_count}\nSaves = ${videoData.download_count}\n=====================\n\nUploader: ${author.nickname || "unknown"}\n(${author.unique_id || "unknown"} - https://www.tiktok.com/@${author.unique_id || "unknown"})\nSound: ${videoData.music}\n`
         }
 
         if (
@@ -77,7 +95,8 @@ let handler = async (m, { conn, args, usedPrefix, command }) => {
             } else throw "No images available."
         } else {
             if (videoURL || videoURLWatermark) {
-                const vidCaption = `Here's the video (≧◡≦)\n\n${info}`
+                const uname = getDisplayName(m, conn)
+                const vidCaption = `Ini kak videonya, ${uname} ~ ✨\n\n${info}`
                 const mediaUrl = videoURL || videoURLWatermark
                 await sendFileWithSafeCaption(conn, m.chat, mediaUrl, isDouyin ? 'douyin.mp4' : 'tiktok.mp4', vidCaption, m, `Info:\n${info}`)
             } else throw "No video link available."
