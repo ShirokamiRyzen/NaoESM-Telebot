@@ -161,21 +161,8 @@ export async function handler(m) {
         }
 
         if (beforeHandler) {
-          // Special handling: ytmp4 uses button callback (ytv:session:quality) to actually download
-          const isYtCallback = !!(m.callbackQuery && typeof m.text === 'string' && /^ytv:/.test(m.text))
-          const isYtmp4Plugin = (() => {
-            try {
-              const cmd = pluginData.command || pluginData.usage
-              if (!cmd) return false
-              if (cmd instanceof RegExp) return /yt(mp4|v|video)/i.test(String(cmd))
-              if (Array.isArray(cmd)) return cmd.some(c => c instanceof RegExp ? /yt(mp4|v|video)/i.test(String(c)) : /^(ytmp4|ytv|ytvideo)$/i.test(String(c)))
-              if (typeof cmd === 'string') return /^(ytmp4|ytv|ytvideo)$/i.test(cmd)
-            } catch {}
-            return false
-          })()
-
-          if (isYtCallback && isYtmp4Plugin && pluginData.limit) {
-            // Defer charging until after successful before-handler run
+          // Generic: for any callback button flow, defer limit charging until plugin marks success
+          if (m.callbackQuery && pluginData.limit) {
             const requiredLimit = pluginData.limit === true ? 1 : pluginData.limit
             const user = global.db?.data?.users?.[m.sender]
             try {
@@ -189,16 +176,7 @@ export async function handler(m) {
                 }
               }
 
-              // Check if session exists to distinguish expired vs valid selection
-              let preHadSession = false
-              try {
-                const parts = (m.text || '').split(':')
-                if (parts.length === 3) {
-                  const sid = parts[1]
-                  if (global.__ytmp4Sessions && global.__ytmp4Sessions[sid]) preHadSession = true
-                }
-              } catch {}
-
+              // Run before; plugin should set m._actionSuccess = true if it successfully handled and should charge
               const beforeResult = await beforeHandler.call(this, m, {
                 conn: this,
                 isROwner,
@@ -208,14 +186,14 @@ export async function handler(m) {
                 isAdmin: m.isAdmin,
               })
 
-              if (!isPrems && !isOwner && preHadSession && beforeResult === false) {
+              if (!isPrems && !isOwner && m._actionSuccess === true) {
                 try {
                   user.limit -= requiredLimit
                   const sisa = user.limit
                   const limitMsg = `✅ ${requiredLimit} limit terpakai\n💡 Sisa limit: ${sisa}`
                   m.reply(limitMsg)
                 } catch (e) {
-                  console.error('Gagal mengurangi/menginformasikan limit (ytmp4 before):', e)
+                  console.error('Gagal mengurangi/menginformasikan limit (callback flow):', e)
                 }
               }
 
@@ -495,29 +473,18 @@ export async function handler(m) {
 
 
             if (!isPrems && !isOwner && pluginData.limit) {
-              const isYtmp4Cmd = (() => {
-                try {
-                  const cmd = pluginData.command || pluginData.usage
-                  if (!cmd) return false
-                  if (cmd instanceof RegExp) return /yt(mp4|v|video)/i.test(String(cmd))
-                  if (Array.isArray(cmd)) return cmd.some(c => c instanceof RegExp ? /yt(mp4|v|video)/i.test(String(c)) : /^(ytmp4|ytv|ytvideo)$/i.test(String(c)))
-                  if (typeof cmd === 'string') return /^(ytmp4|ytv|ytvideo)$/i.test(cmd)
-                } catch {}
-                return false
-              })()
-
               if (typeof m.limit === 'number' && m.limit > 0) {
                 const sisa = global.db.data.users[m.sender].limit
                 const limitMsg = `✅ ${m.limit} limit terpakai\n💡 Sisa limit: ${sisa}`
                 try { m.reply(limitMsg) } catch (e) { console.error("Gagal kirim info limit:", e) }
-              } else if (isYtmp4Cmd && m._deferLimit > 0) {
+        } else if (m._deferLimit > 0 && m._actionSuccess) {
                 try {
                   global.db.data.users[m.sender].limit -= m._deferLimit
                   const sisa = global.db.data.users[m.sender].limit
                   const limitMsg = `✅ ${m._deferLimit} limit terpakai\n💡 Sisa limit: ${sisa}`
                   m.reply(limitMsg)
                 } catch (e) {
-                  console.error('Gagal mengurangi/menginformasikan limit (ytmp4 after success):', e)
+          console.error('Gagal mengurangi/menginformasikan limit (after success):', e)
                 }
               }
             }

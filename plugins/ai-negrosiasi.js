@@ -42,7 +42,7 @@ async function handler(m, { conn, usedPrefix, command, text }) {
     // Safety check
     const mime = await getMimeType(media)
     if (!/^image\//.test(mime)) {
-      return m.reply(`That’s not a valid image file~ (≧ヘ≦ )`)
+      return m.reply(`That's not a valid image file~ (≧ヘ≦ )`)
     }
 
     await m.reply(wait)

@@ -92,29 +92,61 @@ let handler = async (m, { conn, args, usedPrefix, command }) => {
 async function downloadAndSend(m, conn, url, qualityNum) {
   try {
     await m.reply(wait)
-    const api = `${APIs.ryzumi}/api/downloader/ytmp4?url=${encodeURIComponent(url)}&quality=${qualityNum}`
-    const res = await fetch(api, { headers: { accept: 'application/json' } })
-    if (!res.ok) throw new Error(`API request failed (${res.status})`)
-    const json = await res.json()
-    const videoDirectUrl = json?.url
-    if (!videoDirectUrl) throw new Error('Failed to fetch video URL')
-    const title = json?.title || 'YouTube Video'
-    const author = json?.author || ''
-    const lengthSeconds = Number(json?.lengthSeconds || 0) || undefined
-    const thumb = json?.thumbnail || ''
-    const qualityStr = json?.quality || `${qualityNum}p`
-    const fileName = `${sanitizeTitle(title)}_${qualityStr}.mp4`
-  const uname = getDisplayName(m, conn)
-  const captionParts = [`Here’s your video, ${uname} ~ ✨`, `Title: ${title}`]
-    if (author) captionParts.push(`Author: ${author}`)
-    if (lengthSeconds) captionParts.push(`Duration: ${lengthSeconds}s`)
-    if (qualityStr) captionParts.push(`Quality: ${qualityStr}`)
-    const caption = captionParts.join('\n')
-  if (thumb) { try { await conn.sendMessage(m.chat, { image: { url: thumb }, caption }, { quoted: m }) } catch { } }
-  await conn.sendMessage(m.chat, { video: { url: videoDirectUrl }, mimetype: 'video/mp4', fileName, caption }, { quoted: m })
+    const fetchInfo = async (q) => {
+      const api = `${APIs.ryzumi}/api/downloader/ytmp4?url=${encodeURIComponent(url)}&quality=${q}`
+      const res = await fetch(api, { headers: { accept: 'application/json' } })
+      if (!res.ok) throw new Error(`API request failed (${res.status})`)
+      return res.json()
+    }
+
+    const tryQualities = [qualityNum, 480, 360, 240, 144].filter((v, i, a) => a.indexOf(v) === i)
+    const TELEGRAM_MAX_MB = typeof global.telegramMaxUploadMb === 'number' ? global.telegramMaxUploadMb : 49
+    const TELEGRAM_MAX_BYTES = TELEGRAM_MAX_MB * 1024 * 1024
+    let lastErr = null
+    for (const q of tryQualities) {
+      try {
+        const json = await fetchInfo(q)
+        const videoDirectUrl = json?.url
+        if (!videoDirectUrl) throw new Error('Failed to fetch video URL')
+        const title = json?.title || 'YouTube Video'
+        const author = json?.author || ''
+        const lengthSeconds = Number(json?.lengthSeconds || 0) || undefined
+        const thumb = json?.thumbnail || ''
+        const qualityStr = json?.quality || `${q}p`
+        const fileName = `${sanitizeTitle(title)}_${qualityStr}.mp4`
+
+        // Check size via HEAD; if too large, continue to lower quality
+        try {
+          const head = await fetch(videoDirectUrl, { method: 'HEAD' })
+          const len = Number(head.headers.get('content-length') || 0)
+          if (len && len > TELEGRAM_MAX_BYTES) {
+            lastErr = new Error(`Video too large (${(len/1024/1024).toFixed(1)}MB > ${TELEGRAM_MAX_MB}MB) at ${qualityStr}`)
+            continue
+          }
+        } catch (_) { /* ignore HEAD failures; try send anyway */ }
+
+        const uname = getDisplayName(m, conn)
+        const captionParts = [`Here’s your video, ${uname} ~ ✨`, `Title: ${title}`]
+        if (author) captionParts.push(`Author: ${author}`)
+        if (lengthSeconds) captionParts.push(`Duration: ${lengthSeconds}s`)
+        if (qualityStr) captionParts.push(`Quality: ${qualityStr}`)
+        const caption = captionParts.join('\n')
+
+        if (thumb) { try { await conn.sendMessage(m.chat, { image: { url: thumb }, caption }, { quoted: m }) } catch { } }
+        await conn.sendMessage(m.chat, { video: { url: videoDirectUrl }, mimetype: 'video/mp4', fileName, caption }, { quoted: m })
+        return true
+      } catch (e) {
+        lastErr = e
+        // try next quality
+      }
+    }
+    // If all fails or too large, send link fallback
+    await conn.reply(m.chat, `Maaf, ukuran video terlalu besar untuk dikirim via Telegram. Silakan unduh sendiri: ${url}\n${lastErr ? '(' + (lastErr.message || lastErr) + ')' : ''}`, m)
+    return false
   } catch (err) {
     console.error('YTMP4 Download Error:', err)
     await conn.reply(m.chat, `An error occurred: ${err?.message || err}`, m)
+    return false
   }
 }
 
@@ -134,8 +166,13 @@ handler.before = async function (m) {
       return false
     }
     delete global.__ytmp4Sessions[sessionId]
-    await downloadAndSend(m, this, session.url, parseQuality(quality))
-    return false
+    const ok = await downloadAndSend(m, this, session.url, parseQuality(quality))
+    // mark success for handler to charge limit later (generic)
+    if (ok) {
+      m._actionSuccess = true
+      m._ytmp4Success = true // legacy
+    }
+  return false
   } catch (e) {
     console.error('ytmp4 before hook error:', e)
   }
